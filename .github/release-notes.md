@@ -1,3 +1,5 @@
+This release restores the hiding/minimization behavior from v0.2.1. The v0.3.0 overlay experiment was reverted after live desktop testing exposed protected content on hotbar focus and found unreliable Touch ID focus. The implementation and findings remain in Git history.
+
 TouchGate is a macOS menu-bar app that requests Touch ID when you open protected apps, while leaving background messages and tasks running.
 
 ## Install
