@@ -59,6 +59,6 @@ enum TouchGate {
         let delegate = AppDelegate()
         app.setActivationPolicy(.accessory)
         app.delegate = delegate
-        app.run()
+        withExtendedLifetime(delegate) { app.run() }
     }
 }
