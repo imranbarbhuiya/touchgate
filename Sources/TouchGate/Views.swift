@@ -23,6 +23,14 @@ struct SettingsView: View {
                 Spacer()
                 Button("Check again") { gate.refreshTouchID() }.buttonStyle(.link)
             }
+            if !gate.windowControlAvailable {
+                HStack {
+                    Text("Apps such as ChatGPT may need Accessibility access to hide their windows.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Allow window control…", action: gate.requestWindowControl)
+                }
+            }
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Protected apps").font(.headline)
@@ -96,14 +104,17 @@ struct UnlockView: View {
         VStack(spacing: 16) {
             if let app = gate.gateApp {
                 Image(nsImage: NSWorkspace.shared.icon(forFile: app.path)).resizable().frame(width: 64, height: 64)
-                Text(gate.windowsCovered ? "\(app.name) is locked" : "\(app.name) cannot be covered").font(.title3.weight(.semibold))
+                Text(gate.windowsHidden ? "\(app.name) is locked" : "\(app.name) needs window control").font(.title3.weight(.semibold))
             } else {
                 Image(systemName: "lock.fill").font(.largeTitle)
                 Text("App locked").font(.title3.weight(.semibold))
             }
-            Text("Authenticate to uncover this app.").font(.callout).foregroundStyle(.secondary)
+            Text("Authenticate to bring its windows back.").font(.callout).foregroundStyle(.secondary)
             if let notice = gate.gateNotice {
                 Text(notice).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                if !gate.windowControlAvailable {
+                    Button("Allow window control…", action: gate.requestWindowControl)
+                }
             }
             if gate.authenticating {
                 if let view = gate.authenticationView {
