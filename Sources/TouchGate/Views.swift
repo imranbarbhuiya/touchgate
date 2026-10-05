@@ -1,5 +1,7 @@
 import AppKit
 import SwiftUI
+import LocalAuthenticationEmbeddedUI
+import TouchGateCore
 
 struct SettingsView: View {
     @ObservedObject var gate: GateController
@@ -64,8 +66,18 @@ struct SettingsView: View {
                         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
                 }
             }
+            VStack(alignment: .leading, spacing: 8) {
+                Picker("Ask for Touch ID", selection: Binding(get: { gate.lockMode }, set: gate.setLockMode)) {
+                    Text("Every app switch").tag(LockMode.everyActivation)
+                    Text("Once per launch").tag(LockMode.oncePerLaunch)
+                }.pickerStyle(.segmented).disabled(gate.authenticating)
+                Text(gate.lockMode == .everyActivation
+                     ? "Ask again when you return after switching to another app."
+                     : "Stay unlocked until the app quits, the Mac locks or sleeps, or you choose Lock now.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             VStack(alignment: .leading, spacing: 10) {
-                Label("Relocks when you switch away", systemImage: "arrow.left.arrow.right")
+                Label("Lock now, sleep, and screen locking relock all apps", systemImage: "lock.fill")
                 Label("Background messages and tasks keep running", systemImage: "arrow.triangle.2.circlepath")
                 Label("Local automation also needs Touch ID to open a protected app", systemImage: "cursorarrow")
             }.font(.caption).foregroundStyle(.secondary)
@@ -105,10 +117,10 @@ struct UnlockView: View {
                 }
             }
             if gate.authenticating {
-                HStack {
-                    ProgressView().controlSize(.small)
-                    Text("Waiting for Touch ID…").font(.callout)
+                if let view = gate.authenticationView {
+                    EmbeddedTouchID(view: view).id(ObjectIdentifier(view)).frame(width: 64, height: 64)
                 }
+                Text("Use Touch ID to unlock this app.").font(.callout)
             } else {
                 Button(action: gate.unlockApp) {
                     Label("Retry Touch ID", systemImage: "touchid")
@@ -117,4 +129,11 @@ struct UnlockView: View {
             Button("Keep locked", action: gate.keepLocked).buttonStyle(.link)
         }.padding(28).frame(width: 380).fixedSize(horizontal: false, vertical: true).tint(.orange)
     }
+}
+
+struct EmbeddedTouchID: NSViewRepresentable {
+    let view: LAAuthenticationView
+
+    func makeNSView(context: Context) -> LAAuthenticationView { view }
+    func updateNSView(_ nsView: LAAuthenticationView, context: Context) {}
 }
