@@ -39,8 +39,13 @@ final class GateController: NSObject, ObservableObject, NSWindowDelegate {
     private var gateWindow: NSWindow?
     private var minimizedWindows: [pid_t: [AXUIElement]] = [:]
     private var promptOnActivation = false
+    private var gateTimer: Timer?
     private let lockerID = Bundle.main.bundleIdentifier ?? "io.github.imranbarbhuiya.touchgate"
-    private let windowControlNotice = "Window control is needed to hide this app. Allow TouchGate in System Settings → Privacy & Security → Accessibility, then retry."
+    private var windowControlNotice: String {
+        windowControlAvailable
+            ? "This app's windows could not be hidden. Close its windows and try again."
+            : "Window control is needed to hide this app. Allow TouchGate in System Settings → Privacy & Security → Accessibility, then retry."
+    }
 
     override init() {
         super.init()
@@ -55,6 +60,7 @@ final class GateController: NSObject, ObservableObject, NSWindowDelegate {
         workspace.addObserver(self, selector: #selector(systemLocked), name: NSWorkspace.willSleepNotification, object: nil)
         workspace.addObserver(self, selector: #selector(systemLocked), name: NSWorkspace.didWakeNotification, object: nil)
         DistributedNotificationCenter.default().addObserver(self, selector: #selector(systemLocked), name: .init("com.apple.screenIsLocked"), object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appBecameActive), name: NSApplication.didBecomeActiveNotification, object: nil)
         hideProtectedApps()
         if let app = NSWorkspace.shared.frontmostApplication { check(app) }
     }
@@ -63,6 +69,16 @@ final class GateController: NSObject, ObservableObject, NSWindowDelegate {
         let probe = LAContext()
         touchIDAvailable = probe.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) && probe.biometryType == .touchID
         windowControlAvailable = AXIsProcessTrusted()
+    }
+
+    @objc private func appBecameActive(_ notification: Notification) {
+        refreshTouchID()
+        if windowControlAvailable { notice = nil }
+        if promptOnActivation, let target = gateTarget, !windowsHidden {
+            windowsHidden = hide(target)
+            gateNotice = windowsHidden ? nil : windowControlNotice
+        }
+        requestAutomaticUnlock()
     }
 
     private func authenticate(reason: String, completion: @escaping (Bool, String?) -> Void) {
@@ -111,10 +127,19 @@ final class GateController: NSObject, ObservableObject, NSWindowDelegate {
     private func check(_ app: NSRunningApplication) {
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return }
         if app.bundleIdentifier == lockerID {
+            refreshTouchID()
             requestAutomaticUnlock()
             return
         }
-        if context != nil && app.activationPolicy != .regular { return }
+        // Hiding one app can activate another underneath it. Keep the original
+        // target until its gate is dismissed or authentication completes.
+        if gateTarget != nil {
+            if apps.contains(where: { $0.id == app.bundleIdentifier }) {
+                _ = hide(app)
+            }
+            return
+        }
+        if context != nil { return }
         let protectedIDs = Set(apps.map(\.id))
         if state.requiresAuthentication(for: app.bundleIdentifier, protectedApps: protectedIDs, lockerID: lockerID),
            let record = apps.first(where: { $0.id == app.bundleIdentifier }) {
@@ -125,8 +150,6 @@ final class GateController: NSObject, ObservableObject, NSWindowDelegate {
             windowsHidden = hide(app)
             gateNotice = windowsHidden ? nil : windowControlNotice
             showGate()
-        } else if gateTarget != nil && app.bundleIdentifier != gateTarget?.bundleIdentifier {
-            cancelAuthentication()
         }
     }
 
@@ -142,13 +165,37 @@ final class GateController: NSObject, ObservableObject, NSWindowDelegate {
             window.center()
             gateWindow = window
         }
+        if gateTimer == nil {
+            gateTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.maintainGate() }
+            }
+        }
         NSApp.activate()
         gateWindow?.makeKeyAndOrderFront(nil)
         requestAutomaticUnlock()
     }
 
+    private func maintainGate() {
+        guard let target = gateTarget else { return }
+        guard !target.isTerminated else { keepLocked(); return }
+        windowControlAvailable = AXIsProcessTrusted()
+        // A running app can restore/create windows after the initial activation.
+        // Re-hide them while locked without changing the authentication target.
+        for app in NSWorkspace.shared.runningApplications
+            where apps.contains(where: { $0.id == app.bundleIdentifier }) && app.processIdentifier != target.processIdentifier {
+            _ = hide(app)
+        }
+        windowsHidden = hide(target)
+        if !windowsHidden {
+            gateNotice = windowControlNotice
+        } else if promptOnActivation {
+            gateNotice = nil
+        }
+        requestAutomaticUnlock()
+    }
+
     private func requestAutomaticUnlock() {
-        guard promptOnActivation, NSApp.isActive, gateWindow?.isKeyWindow == true, windowsHidden else { return }
+        guard promptOnActivation, windowsHidden, context == nil else { return }
         promptOnActivation = false
         unlockApp()
     }
@@ -173,6 +220,8 @@ final class GateController: NSObject, ObservableObject, NSWindowDelegate {
             self.gateNotice = message
             guard success else { return }
             guard !target.isTerminated else { self.keepLocked(); return }
+            self.gateTimer?.invalidate()
+            self.gateTimer = nil
             self.state.unlock(record.id)
             self.gateWindow?.orderOut(nil)
             self.gateTarget = nil
@@ -185,6 +234,8 @@ final class GateController: NSObject, ObservableObject, NSWindowDelegate {
     }
 
     func keepLocked() {
+        gateTimer?.invalidate()
+        gateTimer = nil
         cancelAuthentication()
         promptOnActivation = false
         gateWindow?.orderOut(nil)
@@ -206,14 +257,16 @@ final class GateController: NSObject, ObservableObject, NSWindowDelegate {
     }
 
     private func hide(_ app: NSRunningApplication) -> Bool {
-        if app.isHidden || app.hide() { return true }
+        if app.isHidden { return true }
+        let hideRequested = app.hide()
         windowControlAvailable = AXIsProcessTrusted()
-        guard windowControlAvailable else { return false }
+        if app.isHidden { return true }
+        guard windowControlAvailable else { return hideRequested }
         let element = AXUIElementCreateApplication(app.processIdentifier)
         if AXUIElementSetAttributeValue(element, kAXHiddenAttribute as CFString, kCFBooleanTrue) == .success { return true }
         var result: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &result) == .success,
-              let windows = result as? [AXUIElement], !windows.isEmpty else { return false }
+              let windows = result as? [AXUIElement], !windows.isEmpty else { return hideRequested }
         var succeeded = true
         for window in windows {
             var minimized: CFTypeRef?

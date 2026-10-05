@@ -104,9 +104,16 @@ struct UnlockView: View {
                     Button("Allow window control…", action: gate.requestWindowControl)
                 }
             }
-            Button(action: gate.unlockApp) {
-                Label(gate.authenticating ? "Waiting for Touch ID…" : "Unlock with Touch ID", systemImage: "touchid")
-            }.buttonStyle(.borderedProminent).controlSize(.large).disabled(gate.authenticating)
+            if gate.authenticating {
+                HStack {
+                    ProgressView().controlSize(.small)
+                    Text("Waiting for Touch ID…").font(.callout)
+                }
+            } else {
+                Button(action: gate.unlockApp) {
+                    Label("Retry Touch ID", systemImage: "touchid")
+                }.buttonStyle(.borderedProminent).controlSize(.large)
+            }
             Button("Keep locked", action: gate.keepLocked).buttonStyle(.link)
         }.padding(28).frame(width: 380).fixedSize(horizontal: false, vertical: true).tint(.orange)
     }
