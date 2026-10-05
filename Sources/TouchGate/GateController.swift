@@ -170,6 +170,7 @@ final class GateController: NSObject, ObservableObject, NSWindowDelegate {
             if let id = app.bundleIdentifier, apps.contains(where: { $0.id == id }),
                !state.isUnlocked(id, processID: app.processIdentifier) {
                 _ = hide(app)
+                showGate()
             }
             return
         }
@@ -186,7 +187,7 @@ final class GateController: NSObject, ObservableObject, NSWindowDelegate {
         }
     }
 
-    private func showGate() {
+    func showGate() {
         if gateWindow == nil {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 320), styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = "TouchGate"
@@ -205,6 +206,7 @@ final class GateController: NSObject, ObservableObject, NSWindowDelegate {
         NSApp.activate()
         gateWindow?.makeKeyAndOrderFront(nil)
         requestAutomaticUnlock()
+        beginEmbeddedAuthentication()
     }
 
     @objc private func maintainGate() {
@@ -225,6 +227,9 @@ final class GateController: NSObject, ObservableObject, NSWindowDelegate {
         }
         requestAutomaticUnlock()
         beginEmbeddedAuthentication()
+        if authenticating, authenticationView != nil, NSApp.isActive, gateWindow?.isKeyWindow != true {
+            gateWindow?.makeKeyAndOrderFront(nil)
+        }
     }
 
     private func requestAutomaticUnlock() {
