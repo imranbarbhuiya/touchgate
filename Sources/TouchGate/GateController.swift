@@ -166,16 +166,15 @@ final class GateController: NSObject, ObservableObject, NSWindowDelegate {
             gateWindow = window
         }
         if gateTimer == nil {
-            gateTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
-                Task { @MainActor in self?.maintainGate() }
-            }
+            gateTimer = Timer.scheduledTimer(timeInterval: 0.2, target: self,
+                                            selector: #selector(maintainGate), userInfo: nil, repeats: true)
         }
         NSApp.activate()
         gateWindow?.makeKeyAndOrderFront(nil)
         requestAutomaticUnlock()
     }
 
-    private func maintainGate() {
+    @objc private func maintainGate() {
         guard let target = gateTarget else { return }
         guard !target.isTerminated else { keepLocked(); return }
         windowControlAvailable = AXIsProcessTrusted()
