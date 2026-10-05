@@ -4,9 +4,21 @@
 
 A small macOS menu-bar app that asks for Touch ID when you open protected apps. Keep chats and other windows private when someone walks up to your unlocked Mac, while leaving background messages and tasks running.
 
-## Use
+## Install on macOS
 
-Requires macOS 14+, a working Touch ID sensor, and an enrolled fingerprint. To build, install Xcode command-line tools and run:
+Requires macOS 14+, a working Touch ID sensor, and an enrolled fingerprint.
+
+1. Download from [the latest release](https://github.com/imranbarbhuiya/touchgate/releases/latest): [Apple silicon (arm64)](https://github.com/imranbarbhuiya/touchgate/releases/latest/download/TouchGate-macos-arm64.zip) or [Intel (x64)](https://github.com/imranbarbhuiya/touchgate/releases/latest/download/TouchGate-macos-x64.zip).
+2. Unzip and drag **TouchGate.app** to **Applications** (or your user's `~/Applications` folder).
+3. Search for **TouchGate** in Raycast or Spotlight, or open it in Finder. Reopen it the same way after quitting; no Terminal is needed.
+
+Reopening a running app shows its settings. Closing settings leaves protection running. Release ZIPs include SHA-256 checksum files. Builds are ad-hoc signed without Developer ID signing or notarization; if macOS blocks opening, follow [Apple's guidance](https://support.apple.com/102445) using System Settings → Privacy & Security. Do not disable Gatekeeper globally.
+
+To update, quit TouchGate and replace the installed app. Your protected-app list stays in macOS preferences. Moving or replacing the app may require re-enabling Accessibility access and checking Start at login again.
+
+## Build from source
+
+Install Xcode command-line tools and run:
 
 ```sh
 swift test
@@ -31,6 +43,12 @@ TouchGate hides windows; it does not terminate apps, suspend processes, intercep
 This is a casual privacy barrier, not an OS security boundary. A protected window may briefly appear before the activation notification is handled. Someone with access to the unlocked account can force-quit TouchGate, change its local preferences, or access an app's data or web version. Notifications, notification previews, screenshots, Mission Control, and background windows are not comprehensively protected. Configure sensitive notification previews separately.
 
 Finder and TouchGate itself cannot be added. There is no network service, analytics, account, credential collection, or fingerprint storage. The protected app names, bundle IDs, and installation paths are saved only in macOS preferences for `io.github.imranbarbhuiya.touchgate`, outside this repository. Apple handles the biometric check.
+
+## Build a release
+
+Run `bash scripts/package.sh` on macOS to create the app ZIP and checksum in ignored `dist/`. Packaging includes only the executable, icon, and bundle metadata; local protected-app preferences and logs are excluded.
+
+The [release workflow](.github/workflows/release.yml) tests and builds Apple silicon and Intel packages. A manual workflow run produces downloadable artifacts. Pushing a `v*` tag matching `CFBundleShortVersionString` in `assets/Info.plist` publishes a GitHub Release. Update both version fields in that plist before tagging the next release.
 
 ## Development
 
