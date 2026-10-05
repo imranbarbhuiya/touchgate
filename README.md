@@ -14,7 +14,9 @@ bash scripts/build.sh
 open dist/TouchGate.app
 ```
 
-Open **Protected apps…** from the shield icon in the menu bar, choose **Add apps…**, and select applications. Touch ID confirms changes to the protected list. Opening a protected app hides its windows and shows an unlock window. Choose **Unlock with Touch ID** to restore it. Switching to another app relocks it. **Lock now**, Mac sleep, and screen locking clear the current unlock.
+Open **Protected apps…** from the shield icon in the menu bar, choose **Add apps…**, and select applications. Touch ID confirms changes to the protected list. Opening a protected app hides its windows and opens the Touch ID prompt when the unlock window becomes active. **Unlock with Touch ID** lets you retry after cancelling. Switching to another app relocks it. **Lock now**, Mac sleep, and screen locking clear the current unlock.
+
+Some apps, including apps with an accessory activation policy, cannot be hidden through the standard macOS app API. Choose **Allow window control…** and enable TouchGate under System Settings → Privacy & Security → Accessibility. Then return and choose **Check again** and **Lock now**. This permission lets TouchGate hide or minimize their windows and restore the windows it minimized after authentication. It does not read chat messages or send keystrokes. If permission is missing or a window cannot be controlled, TouchGate reports the failure; do not treat that app as protected until its windows disappear on locking. macOS grants broad UI-control permission, so enable it only for a build you trust.
 
 Closing TouchGate's settings window leaves protection running. Normal quitting requires Touch ID when apps are protected. **Start at login** uses macOS Login Items; approve it in System Settings if requested. You can move the built app to your Applications folder before enabling login startup. Moving or rebuilding it may require re-registering the login item.
 

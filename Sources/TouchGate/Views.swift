@@ -21,6 +21,14 @@ struct SettingsView: View {
                 Spacer()
                 Button("Check again") { gate.refreshTouchID() }.buttonStyle(.link)
             }
+            if !gate.windowControlAvailable {
+                HStack {
+                    Text("Apps such as ChatGPT may need Accessibility access to hide their windows.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Allow window control…", action: gate.requestWindowControl)
+                }
+            }
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     Text("Protected apps").font(.headline)
@@ -84,7 +92,7 @@ struct UnlockView: View {
         VStack(spacing: 16) {
             if let app = gate.gateApp {
                 Image(nsImage: NSWorkspace.shared.icon(forFile: app.path)).resizable().frame(width: 64, height: 64)
-                Text("\(app.name) is locked").font(.title3.weight(.semibold))
+                Text(gate.windowsHidden ? "\(app.name) is locked" : "\(app.name) needs window control").font(.title3.weight(.semibold))
             } else {
                 Image(systemName: "lock.fill").font(.largeTitle)
                 Text("App locked").font(.title3.weight(.semibold))
@@ -92,11 +100,14 @@ struct UnlockView: View {
             Text("Authenticate to bring its windows back.").font(.callout).foregroundStyle(.secondary)
             if let notice = gate.gateNotice {
                 Text(notice).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                if !gate.windowControlAvailable {
+                    Button("Allow window control…", action: gate.requestWindowControl)
+                }
             }
             Button(action: gate.unlockApp) {
                 Label(gate.authenticating ? "Waiting for Touch ID…" : "Unlock with Touch ID", systemImage: "touchid")
             }.buttonStyle(.borderedProminent).controlSize(.large).disabled(gate.authenticating)
             Button("Keep locked", action: gate.keepLocked).buttonStyle(.link)
-        }.padding(28).frame(width: 380, height: 320).tint(.orange)
+        }.padding(28).frame(width: 380).fixedSize(horizontal: false, vertical: true).tint(.orange)
     }
 }

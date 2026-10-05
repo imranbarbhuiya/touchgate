@@ -25,7 +25,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         app.submenu = menu.copy() as? NSMenu
         main.addItem(app)
         NSApp.mainMenu = main
-        if controller.apps.isEmpty || CommandLine.arguments.contains("--settings") { showSettings() }
+        showSettings()
     }
 
     @objc func showSettings() {

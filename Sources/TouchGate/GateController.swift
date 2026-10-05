@@ -3,6 +3,7 @@ import SwiftUI
 import LocalAuthentication
 import ServiceManagement
 import UniformTypeIdentifiers
+import ApplicationServices
 import TouchGateCore
 
 struct ProtectedApp: Codable, Identifiable, Equatable {
@@ -21,7 +22,7 @@ struct ProtectedApp: Codable, Identifiable, Equatable {
 }
 
 @MainActor
-final class GateController: NSObject, ObservableObject {
+final class GateController: NSObject, ObservableObject, NSWindowDelegate {
     @Published private(set) var apps: [ProtectedApp] = []
     @Published private(set) var gateApp: ProtectedApp?
     @Published private(set) var authenticating = false
@@ -29,13 +30,17 @@ final class GateController: NSObject, ObservableObject {
     @Published var gateNotice: String?
     @Published private(set) var loginEnabled = SMAppService.mainApp.status == .enabled
     @Published private(set) var touchIDAvailable = false
+    @Published private(set) var windowControlAvailable = AXIsProcessTrusted()
+    @Published private(set) var windowsHidden = false
     private var state = LockState()
     private var context: LAContext?
     private var requestID: UUID?
     private var gateTarget: NSRunningApplication?
     private var gateWindow: NSWindow?
-    private var redirectingToGate = false
+    private var minimizedWindows: [pid_t: [AXUIElement]] = [:]
+    private var promptOnActivation = false
     private let lockerID = Bundle.main.bundleIdentifier ?? "io.github.imranbarbhuiya.touchgate"
+    private let windowControlNotice = "Window control is needed to hide this app. Allow TouchGate in System Settings → Privacy & Security → Accessibility, then retry."
 
     override init() {
         super.init()
@@ -57,6 +62,7 @@ final class GateController: NSObject, ObservableObject {
     func refreshTouchID() {
         let probe = LAContext()
         touchIDAvailable = probe.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: nil) && probe.biometryType == .touchID
+        windowControlAvailable = AXIsProcessTrusted()
     }
 
     private func authenticate(reason: String, completion: @escaping (Bool, String?) -> Void) {
@@ -103,8 +109,11 @@ final class GateController: NSObject, ObservableObject {
     }
 
     private func check(_ app: NSRunningApplication) {
-        if app.bundleIdentifier == lockerID { redirectingToGate = false; return }
-        guard !redirectingToGate else { return }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier else { return }
+        if app.bundleIdentifier == lockerID {
+            requestAutomaticUnlock()
+            return
+        }
         if context != nil && app.activationPolicy != .regular { return }
         let protectedIDs = Set(apps.map(\.id))
         if state.requiresAuthentication(for: app.bundleIdentifier, protectedApps: protectedIDs, lockerID: lockerID),
@@ -112,14 +121,12 @@ final class GateController: NSObject, ObservableObject {
             if gateTarget?.processIdentifier != app.processIdentifier { cancelAuthentication() }
             gateTarget = app
             gateApp = record
-            redirectingToGate = true
-            gateNotice = app.hide() ? nil : "This app could not be hidden. Keep its windows closed until you unlock it."
+            promptOnActivation = context == nil
+            windowsHidden = hide(app)
+            gateNotice = windowsHidden ? nil : windowControlNotice
             showGate()
         } else if gateTarget != nil && app.bundleIdentifier != gateTarget?.bundleIdentifier {
             cancelAuthentication()
-            gateWindow?.orderOut(nil)
-            gateTarget = nil
-            gateApp = nil
         }
     }
 
@@ -128,16 +135,38 @@ final class GateController: NSObject, ObservableObject {
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 380, height: 320), styleMask: [.titled, .closable], backing: .buffered, defer: false)
             window.title = "TouchGate"
             window.isReleasedWhenClosed = false
+            window.delegate = self
+            window.level = .floating
+            window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             window.contentView = NSHostingView(rootView: UnlockView(gate: self))
             window.center()
             gateWindow = window
         }
         NSApp.activate()
         gateWindow?.makeKeyAndOrderFront(nil)
+        requestAutomaticUnlock()
+    }
+
+    private func requestAutomaticUnlock() {
+        guard promptOnActivation, NSApp.isActive, gateWindow?.isKeyWindow == true, windowsHidden else { return }
+        promptOnActivation = false
+        unlockApp()
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow, window === gateWindow else { return }
+        requestAutomaticUnlock()
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        if let window = notification.object as? NSWindow, window === gateWindow { keepLocked() }
     }
 
     func unlockApp() {
         guard let target = gateTarget, let record = gateApp else { return }
+        promptOnActivation = false
+        windowsHidden = hide(target)
+        guard windowsHidden else { gateNotice = windowControlNotice; return }
         gateNotice = nil
         authenticate(reason: "Unlock \(record.name)") { [weak self] success, message in
             guard let self, self.gateTarget?.processIdentifier == target.processIdentifier else { return }
@@ -148,14 +177,16 @@ final class GateController: NSObject, ObservableObject {
             self.gateWindow?.orderOut(nil)
             self.gateTarget = nil
             self.gateApp = nil
+            self.restoreWindows(for: target.processIdentifier)
             target.unhide()
+            NSApp.yieldActivation(to: target)
             target.activate(options: [])
         }
     }
 
     func keepLocked() {
         cancelAuthentication()
-        redirectingToGate = false
+        promptOnActivation = false
         gateWindow?.orderOut(nil)
         gateTarget = nil
         gateApp = nil
@@ -170,7 +201,42 @@ final class GateController: NSObject, ObservableObject {
     private func hideProtectedApps() {
         let ids = Set(apps.map(\.id))
         for app in NSWorkspace.shared.runningApplications where app.bundleIdentifier.map(ids.contains) == true {
-            app.hide()
+            if !hide(app) { notice = "Some apps need window control. Allow TouchGate in System Settings → Privacy & Security → Accessibility." }
+        }
+    }
+
+    private func hide(_ app: NSRunningApplication) -> Bool {
+        if app.isHidden || app.hide() { return true }
+        windowControlAvailable = AXIsProcessTrusted()
+        guard windowControlAvailable else { return false }
+        let element = AXUIElementCreateApplication(app.processIdentifier)
+        if AXUIElementSetAttributeValue(element, kAXHiddenAttribute as CFString, kCFBooleanTrue) == .success { return true }
+        var result: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &result) == .success,
+              let windows = result as? [AXUIElement], !windows.isEmpty else { return false }
+        var succeeded = true
+        for window in windows {
+            var minimized: CFTypeRef?
+            if AXUIElementCopyAttributeValue(window, kAXMinimizedAttribute as CFString, &minimized) == .success,
+               minimized as? Bool == true { continue }
+            if AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanTrue) == .success {
+                minimizedWindows[app.processIdentifier, default: []].append(window)
+            } else { succeeded = false }
+        }
+        return succeeded
+    }
+
+    private func restoreWindows(for pid: pid_t) {
+        for window in minimizedWindows.removeValue(forKey: pid) ?? [] {
+            AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        }
+    }
+
+    func requestWindowControl() {
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        windowControlAvailable = AXIsProcessTrustedWithOptions(options)
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+            NSWorkspace.shared.open(url)
         }
     }
 
@@ -180,6 +246,7 @@ final class GateController: NSObject, ObservableObject {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         if app.bundleIdentifier == state.unlockedAppID { state.lock() }
         if app.processIdentifier == gateTarget?.processIdentifier { keepLocked() }
+        minimizedWindows.removeValue(forKey: app.processIdentifier)
     }
 
     func addApps() {
@@ -208,6 +275,9 @@ final class GateController: NSObject, ObservableObject {
             self.notice = message
             guard success else { return }
             self.apps.removeAll { $0.id == app.id }
+            for target in NSWorkspace.shared.runningApplications where target.bundleIdentifier == app.id {
+                self.restoreWindows(for: target.processIdentifier)
+            }
             self.save()
             self.lockAll()
         }
@@ -236,7 +306,10 @@ final class GateController: NSObject, ObservableObject {
         if apps.isEmpty { NSApp.terminate(nil); return }
         authenticate(reason: "Quit TouchGate and stop protecting your apps") { [weak self] success, message in
             self?.notice = message
-            if success { NSApp.terminate(nil) }
+            if success, let self {
+                for pid in Array(self.minimizedWindows.keys) { self.restoreWindows(for: pid) }
+                NSApp.terminate(nil)
+            }
         }
     }
 }
